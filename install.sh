@@ -10,8 +10,11 @@
 set -eu
 
 REPO="v-dermichev/link-router"
-DEFAULT_VERSION="0.1.0-beta.2"
-ASSET="link-router-x86_64-unknown-linux-musl"
+DEFAULT_VERSION="0.1.0-beta.3"
+case "$(uname -s)" in
+    FreeBSD) ASSET="link-router-x86_64-unknown-freebsd" ;;
+    *) ASSET="link-router-x86_64-unknown-linux-musl" ;;
+esac
 
 usage() {
     cat <<EOF
@@ -79,6 +82,7 @@ detect_package_manager() {
     elif has zypper; then PKG=zypper
     elif has xbps-install; then PKG=xbps
     elif has apk; then PKG=apk
+    elif [ "$(uname -s)" = FreeBSD ] && has pkg; then PKG=pkg
     fi
 }
 
@@ -90,6 +94,7 @@ pkg_command() {
         zypper) printf 'zypper install' ;;
         xbps) printf 'xbps-install -S' ;;
         apk) printf 'apk add' ;;
+        pkg) printf 'pkg install' ;;
     esac
 }
 
@@ -100,7 +105,7 @@ install_packages() {
     if [ "$ASSUME_YES" = 1 ] || ! tty_ok; then
         case "$PKG" in
             pacman) cmd="$cmd --noconfirm" ;;
-            apt | dnf | xbps) cmd="$cmd -y" ;;
+            apt | dnf | xbps | pkg) cmd="$cmd -y" ;;
             zypper) cmd="zypper --non-interactive install" ;;
         esac
     fi
@@ -158,7 +163,10 @@ check_requirements() {
     step "Checking requirements"
     errors=0
 
-    [ "$(uname -s)" = Linux ] || { warn "link-router supports Linux only (found $(uname -s))"; errors=$((errors + 1)); }
+    case "$(uname -s)" in
+        Linux | FreeBSD) ;;
+        *) warn "link-router supports Linux and FreeBSD (found $(uname -s))"; errors=$((errors + 1)) ;;
+    esac
     if [ -z "$BINARY" ]; then
         case "$(uname -m)" in
             x86_64 | amd64) ;;

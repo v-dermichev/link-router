@@ -20,6 +20,7 @@ function makeWindow(resourceClass, { x = 100, y = 100, width = 400, height = 300
         output,
         desktops: [desktop],
         keepAbove: false,
+        fullScreen: false,
         move: false,
         resize: false,
         x, y, width, height,
@@ -41,8 +42,8 @@ function makeWindow(resourceClass, { x = 100, y = 100, width = 400, height = 300
 }
 
 function run(src, { followFocus = true } = {}) {
-    const screen1 = { name: "DP-1", area: { x: 0, y: 0, width: 1920, height: 1040 } };
-    const screen2 = { name: "HDMI-1", area: { x: 1920, y: 0, width: 2560, height: 1440 } };
+    const screen1 = { name: "DP-1", area: { x: 0, y: 0, width: 1920, height: 1040 }, screen: { x: 0, y: 0, width: 1920, height: 1080 } };
+    const screen2 = { name: "HDMI-1", area: { x: 1920, y: 0, width: 2560, height: 1440 }, screen: { x: 1920, y: 0, width: 2560, height: 1440 } };
     const desk1 = { id: "d1" }, desk2 = { id: "d2" };
     const windows = [];
     const workspace = {
@@ -50,11 +51,11 @@ function run(src, { followFocus = true } = {}) {
         currentDesktop: desk1,
         windowAdded: signal(),
         windowList: () => windows.slice(),
-        clientArea: (_option, output) => output.area,
+        clientArea: (option, output) => (option === 4 ? output.screen : output.area),
     };
     const env = { workspace, windows, screen1, screen2, desk1, desk2 };
     const script = followFocus ? src : src.replace("const FOLLOW_FOCUS = true;", "const FOLLOW_FOCUS = false;");
-    return { env, start: () => new Function("workspace", "KWin", "console", script)(workspace, { PlacementArea: 1 }, { info() {} }) };
+    return { env, start: () => new Function("workspace", "KWin", "console", script)(workspace, { PlacementArea: 0, FullScreenArea: 4 }, { info() {} }) };
 }
 
 const MX = Number(/const MARGIN_X = (-?\d+);/.exec(source)[1]);
@@ -102,6 +103,30 @@ const corner = (w, area) => [area.x + area.width - MX - w.width, area.y + area.h
     again.internalId = player.internalId;
     env.workspace.windowAdded.emit(again);
     assert.deepEqual([again.x, again.y], corner(again, env.screen2.area), "a reopened window is hooked again");
+}
+
+// Fullscreen (flag set before or after the size change) and maximized windows are left alone;
+// leaving fullscreen puts the restored window back in the corner.
+{
+    const { env, start } = run(source);
+    start();
+    const player = makeWindow(APP, { output: env.screen1, desktop: env.desk1 });
+    env.workspace.windowAdded.emit(player);
+    const corner0 = [player.x, player.y];
+
+    player.frameGeometry = { x: 0, y: 0, width: 1920, height: 1080, __native: true };
+    player.fullScreen = true;
+    assert.deepEqual([player.x, player.y, player.width, player.height], [0, 0, 1920, 1080], "fullscreen size reported before the flag");
+    player.captionChanged.emit();
+    assert.deepEqual([player.x, player.y], [0, 0], "a new file while fullscreen doesn't move it");
+
+    player.fullScreen = false;
+    player.frameGeometry = { x: 10, y: 10, width: 400, height: 300, __native: true };
+    assert.deepEqual([player.x, player.y], corner0, "re-anchored after leaving fullscreen");
+
+    player.maximizeMode = 3;
+    player.frameGeometry = { x: 0, y: 0, width: 1920, height: 1040, __native: true };
+    assert.deepEqual([player.x, player.y, player.width], [0, 0, 1920], "maximized stays maximized");
 }
 
 // Without follow_focus a new file doesn't move the window to another desktop or screen.

@@ -1,6 +1,6 @@
 # link-router
 
-Status: 0.1.0-beta.2. Interception and the `mpv-video` plugin work; most of the
+Status: 0.1.0-beta.3. Interception and the `mpv-video` plugin work; most of the
 design below is not implemented yet (see [MVP status](#mvp-status)).
 
 ## Install
@@ -15,9 +15,9 @@ The installer:
    (`.mp4`, `.webm`, ...), or takes `--youtube`, `--instagram`, `--direct`,
    `--all`. The choice is a marked block at the end of `init.lua`; rerunning the
    installer offers to change it and leaves the rest of the config alone;
-2. checks requirements (Linux x86_64, `curl` or `wget`, `sha256sum`, `mpv`;
-   `yt-dlp` optional) and offers to install missing packages with pacman, apt,
-   dnf, zypper, xbps or apk;
+2. checks requirements (Linux x86_64 or FreeBSD 15 amd64, `curl` or `wget`,
+   `sha256sum`, `mpv`; `yt-dlp` optional) and offers to install missing
+   packages with pacman, apt, dnf, zypper, xbps, apk or pkg;
 3. warns when the default `https` handler isn't a web browser (link-router
    falls back to it, so make the browser the default first);
 4. downloads the static release binary to `~/.local/bin` and verifies its
@@ -79,7 +79,8 @@ about video or any site; plugins do.
 
 Build from source: `CC_x86_64_unknown_linux_musl=musl-gcc cargo build --release --target x86_64-unknown-linux-musl`,
 then `sh install.sh --binary target/x86_64-unknown-linux-musl/release/link-router`.
-Releases attach that binary and its `.sha256`. Tests: `cargo test`, and for the
+Releases attach that binary and a FreeBSD 15 build (cross-compiled for
+`x86_64-unknown-freebsd` against a FreeBSD sysroot), each with its `.sha256`. Tests: `cargo test`, and for the
 KWin script `link-router kwin-script | node tests/kwin-placement.mjs`.
 
 Implemented:
@@ -112,7 +113,10 @@ Implemented:
   On KDE Plasma 6, mpv sizes the window from `geometry` and a KWin script
   loaded over D-Bus anchors it bottom-right, keeps it above other windows and
   follows the current desktop (not yet tested on a real Plasma session; see
-  [docs/testing-kde.md](docs/testing-kde.md)). Elsewhere mpv gets
+  [docs/testing-kde.md](docs/testing-kde.md)). On sway, a `for_window` rule on
+  the new player's PID floats, sizes and places it before it maps (the player
+  is borderless there), and criteria commands move a running one. A player the
+  user made fullscreen is left alone when the next link loads. Elsewhere mpv gets
   `--geometry=WxH-35-25`, which X11 window managers position and Wayland
   compositors use for the size only.
   When the size isn't known in advance (direct links, some yt-dlp results), the
@@ -123,7 +127,8 @@ Implemented:
   streams that fail to play move on to the next resolver.
 
 Not implemented: routes, Lua plugins and handlers, the streaming proxy,
-compositor adapters other than Hyprland, the first-run wizard.
+window placement on GNOME (planned for the next version), the first-run
+wizard.
 
 Logs: `$XDG_STATE_HOME/link-router/daemon.log` (milliseconds since the click),
 `mpv.log` next to it. The player's app ID defaults to `link-router-mpv`; the

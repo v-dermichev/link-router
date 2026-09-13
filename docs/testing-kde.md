@@ -33,6 +33,9 @@ Tick what matches; note what doesn't.
 5. Switch to another virtual desktop (or focus another screen) and click a
    video link. The window moves to the current desktop and screen.
 6. Drag the window somewhere else; it stays there until the next link.
+   Make it fullscreen (double-click or `f`): it fills the screen, and a link
+   clicked meanwhile plays fullscreen too. Leaving fullscreen puts it back in
+   the corner.
 7. Click an ordinary link (e.g. `https://kde.org`). It opens in the browser as
    usual.
 8. Change the default browser in System Settings, then run

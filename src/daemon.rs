@@ -19,6 +19,7 @@ use crate::config::{Config, VideoConfig};
 use crate::desktop;
 use crate::hypr::{self, Hypr};
 use crate::kwin;
+use crate::sway::Sway;
 use crate::intercept::{self, State, UserOverride};
 use crate::mpv::{self, Outcome, Player};
 use crate::paths;
@@ -226,16 +227,27 @@ enum Played {
 enum Placer {
     /// A runtime window rule for a new window, dispatches for a running one.
     Hyprland(Hypr, hypr::Monitor),
+    /// A `for_window` rule on the new player's PID, set while mpv waits in the
+    /// size handshake before creating its window; commands for a running one.
+    Sway(Sway, hypr::Monitor),
     /// mpv sizes the window from `geometry`; KWin's placement script positions it.
     KWin,
     /// mpv's `geometry` with bottom-right offsets (position honoured on X11 only).
     Plain,
+    /// A running player the user made fullscreen: left alone.
+    Fullscreen,
 }
 
 async fn placer_for(d: &Daemon, env: &std::collections::BTreeMap<String, String>, spawning: bool) -> Placer {
     if let Some(h) = Hypr::from_env(env) {
         if let Ok(m) = h.focused_monitor().await {
             return Placer::Hyprland(h, m);
+        }
+    }
+    if let Some(s) = Sway::from_env(env) {
+        match s.focused_workspace().await {
+            Ok(m) => return Placer::Sway(s, m),
+            Err(e) => d.log(0, &format!("sway IPC unavailable: {e:#}")),
         }
     }
     if kwin::is_kde(env) {
@@ -262,6 +274,18 @@ async fn place(cfg: &VideoConfig, placer: &Placer, player: Option<&Player>, fres
             }
             Ok(())
         }
+        (Placer::Fullscreen, _) => Ok(()),
+        (Placer::Sway(s, m), Some(p @ Player { pid: Some(pid), .. })) => {
+            // sway lets mpv resize its floating window for each new video, so mpv
+            // gets the size as well.
+            p.command(serde_json::json!(["set_property", "geometry", mpv::geometry(size, cfg.margin)])).await?;
+            let absolute = hypr::anchor(m, size, cfg.margin).1;
+            if fresh {
+                s.rule_for_pid(*pid, size, absolute).await
+            } else {
+                s.resize_move(*pid, size, absolute).await
+            }
+        }
         (_, Some(p)) => p
             .command(serde_json::json!(["set_property", "geometry", mpv::geometry(size, cfg.margin)]))
             .await
@@ -284,9 +308,22 @@ async fn play(d: &Arc<Daemon>, msg: &Message, content: &Content) -> Result<Playe
     let mut placer = placer_for(d, &msg.env, running.is_none()).await;
     let mut existing = None;
     if let Some(p) = running {
-        if let (Placer::Hyprland(h, m), true) = (&placer, cfg.follow_focus) {
-            if let Ok(Some(c)) = h.client(&cfg.app_id, p.pid).await {
-                let _ = h.move_to_workspace(&c.address, &m.workspace).await;
+        // A fullscreen player stays as the user set it; only the file changes.
+        let fullscreen = p.command(serde_json::json!(["get_property", "fullscreen"])).await.ok().and_then(|v| v.as_bool()) == Some(true);
+        if fullscreen {
+            placer = Placer::Fullscreen;
+        }
+        if cfg.follow_focus {
+            match (&placer, p.pid) {
+                (Placer::Hyprland(h, m), _) => {
+                    if let Ok(Some(c)) = h.client(&cfg.app_id, p.pid).await {
+                        let _ = h.move_to_workspace(&c.address, &m.workspace).await;
+                    }
+                }
+                (Placer::Sway(s, m), Some(pid)) => {
+                    let _ = s.move_to_workspace(pid, &m.workspace).await;
+                }
+                _ => {}
             }
         }
         if let Some(size) = known {
@@ -312,7 +349,10 @@ async fn play(d: &Arc<Daemon>, msg: &Message, content: &Content) -> Result<Playe
                     _ => geometry = Some(size),
                 }
             }
-            let (p, rx) = Player::spawn(cfg, content, &msg.env, geometry, known.is_none()).await?;
+            // sway can only place a window by PID, which exists once mpv runs: mpv
+            // then always reports its size and waits for the rule.
+            let handshake = known.is_none() || matches!(placer, Placer::Sway(..));
+            let (p, rx) = Player::spawn(cfg, content, &msg.env, geometry, handshake).await?;
             *guard = Some(p.clone());
             spawn_idle_quit(d.clone(), p.clone());
             (p, rx, None, true)
@@ -419,21 +459,42 @@ fn run_sentinel(d: &Arc<Daemon>) {
 
 /// inotify on every directory holding mimeapps lists or desktop entries; a
 /// burst of changes runs one sentinel pass after 500 ms of quiet.
+#[cfg(target_os = "linux")]
+mod inotify {
+    pub use libc::{inotify_add_watch, inotify_init1, IN_CLOEXEC, IN_CLOSE_WRITE, IN_CREATE, IN_DELETE, IN_MOVED_FROM, IN_MOVED_TO};
+}
+
+/// FreeBSD 15 has inotify(2) with Linux's event bits; the libc crate doesn't bind it yet.
+#[cfg(target_os = "freebsd")]
+mod inotify {
+    use libc::{c_char, c_int};
+    extern "C" {
+        pub fn inotify_init1(flags: c_int) -> c_int;
+        pub fn inotify_add_watch(fd: c_int, path: *const c_char, mask: u32) -> c_int;
+    }
+    pub const IN_CLOEXEC: c_int = libc::O_CLOEXEC;
+    pub const IN_CLOSE_WRITE: u32 = 0x0000_0008;
+    pub const IN_MOVED_FROM: u32 = 0x0000_0040;
+    pub const IN_MOVED_TO: u32 = 0x0000_0080;
+    pub const IN_CREATE: u32 = 0x0000_0100;
+    pub const IN_DELETE: u32 = 0x0000_0200;
+}
+
 fn spawn_watcher(d: Arc<Daemon>) {
     std::thread::spawn(move || {
-        let fd = unsafe { libc::inotify_init1(libc::IN_CLOEXEC) };
+        let fd = unsafe { inotify::inotify_init1(inotify::IN_CLOEXEC) };
         if fd < 0 {
             d.log(0, "inotify unavailable; sentinel runs only at start");
             return;
         }
-        let mask = libc::IN_CLOSE_WRITE | libc::IN_MOVED_TO | libc::IN_CREATE | libc::IN_DELETE | libc::IN_MOVED_FROM;
+        let mask = inotify::IN_CLOSE_WRITE | inotify::IN_MOVED_TO | inotify::IN_CREATE | inotify::IN_DELETE | inotify::IN_MOVED_FROM;
         let mut dirs = paths::mimeapps_dirs();
         dirs.extend(paths::application_dirs());
         dirs.sort();
         dirs.dedup();
         for dir in dirs.iter().filter(|p| p.is_dir()) {
             if let Ok(c) = std::ffi::CString::new(dir.to_string_lossy().as_bytes()) {
-                unsafe { libc::inotify_add_watch(fd, c.as_ptr(), mask) };
+                unsafe { inotify::inotify_add_watch(fd, c.as_ptr(), mask) };
             }
         }
         let mut buf = [0u8; 8192];

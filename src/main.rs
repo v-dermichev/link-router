@@ -8,6 +8,7 @@ mod kwin;
 mod mpv;
 mod paths;
 mod resolve;
+mod sway;
 
 use std::path::Path;
 

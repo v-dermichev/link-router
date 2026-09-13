@@ -36,6 +36,15 @@ function setGeometry(w, x, y) {
     }
 }
 
+// Fullscreen and maximized windows belong to the user; KWin may report the
+// fullscreen size before the fullScreen flag, hence the screen-size check.
+function userSized(w) {
+    if (w.fullScreen || (w.maximizeMode !== undefined && w.maximizeMode !== 0)) return true;
+    const output = w.output || workspace.activeScreen;
+    const screen = workspace.clientArea(KWin.FullScreenArea, output, workspace.currentDesktop);
+    return w.width >= screen.width && w.height >= screen.height;
+}
+
 function anchor(w, toActive) {
     const output = toActive || !w.output ? workspace.activeScreen : w.output;
     const desktop = toActive || !w.desktops || w.desktops.length === 0 ? workspace.currentDesktop : w.desktops[0];
@@ -58,11 +67,11 @@ function hook(w) {
         width = w.width;
         height = w.height;
         // A size the user drags stays where the user puts it.
-        if (w.move || w.resize) return;
+        if (w.move || w.resize || userSized(w)) return;
         anchor(w, false);
     });
     w.captionChanged.connect(function () {
-        if (!FOLLOW_FOCUS) return;
+        if (!FOLLOW_FOCUS || userSized(w)) return;
         w.desktops = [workspace.currentDesktop];
         anchor(w, true);
     });

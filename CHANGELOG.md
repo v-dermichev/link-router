@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.1.0-beta.3
+
+- KDE: fullscreen and maximized players are no longer pushed back into the
+  corner by the placement script (the fullscreen window ended up shifted by
+  the margins).
+- A running player that is fullscreen keeps its size and place when the next
+  link loads, on every compositor.
+- sway: a `for_window` rule on the new player's PID floats, sizes and places
+  it before it maps; a running player is moved with criteria commands and
+  follows the focused workspace. The player is borderless on sway.
+- FreeBSD 15: release binary, inotify support, the installer picks the
+  FreeBSD build and installs missing packages with `pkg`.
+
 ## 0.1.0-beta.2
 
 - KDE Plasma 6: a KWin script, loaded over D-Bus once per daemon (reloaded
