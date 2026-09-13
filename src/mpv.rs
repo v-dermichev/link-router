@@ -188,7 +188,22 @@ impl Player {
         let socket = paths::runtime_dir().join(format!("mpv-{}.sock", SPAWNED.fetch_add(1, Ordering::SeqCst)));
         let _ = std::fs::remove_file(&socket);
         let script = script_path()?;
-        let mut args: Vec<String> = cfg.args.clone();
+        let mut args: Vec<String> = Vec::new();
+        // On Wayland, a compositor that can't take GPU buffers gets
+        // shared-memory frames. Otherwise only Wayland GPU contexts are tried:
+        // mpv would fall back to X11 through XWayland, where 0.41 aborts. User
+        // arguments choosing an output or context win.
+        let chooses = |prefix: &str| cfg.args.iter().any(|a| a == prefix || a.starts_with(&format!("{prefix}=")));
+        if link_env.contains_key("WAYLAND_DISPLAY") && !chooses("--vo") && !chooses("--gpu-context") {
+            match crate::wayland::globals(link_env) {
+                Some(g) if !crate::wayland::shares_gpu_buffers(&g) => args.push("--vo=wlshm".into()),
+                _ => {
+                    args.push("--vo=gpu-next,gpu,wlshm".into());
+                    args.push("--gpu-context=waylandvk,wayland".into());
+                }
+            }
+        }
+        args.extend(cfg.args.iter().cloned());
         args.extend([
             format!("--wayland-app-id={}", cfg.app_id),
             format!("--x11-name={}", cfg.app_id),
@@ -294,6 +309,7 @@ impl Player {
         player.command(json!(["observe_property", 1, "idle-active"])).await.ok();
         player.command(json!(["observe_property", 2, "user-data/link-router/audio-error"])).await.ok();
         player.command(json!(["observe_property", 3, "user-data/link-router/size"])).await.ok();
+        player.command(json!(["observe_property", 4, "fullscreen"])).await.ok();
         Ok((player, rx))
     }
 

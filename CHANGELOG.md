@@ -2,6 +2,23 @@
 
 ## 0.1.0-beta.4
 
+Tested end to end on FreeBSD 15.1 with native KDE Plasma 6.6.6, sway (pixman
+renderer) and Hyprland 0.56.2 sessions: fresh install, playback in windowed
+and fullscreen modes with landscape and portrait videos, uninstall, install
+over a kept config, upgrade from 0.1.0-beta.3.
+
+- Leaving fullscreen places the player again for the current video; before,
+  compositors restored the size of the video that played before fullscreen.
+- mpv output defaults on Wayland: only Wayland GPU contexts (mpv 0.41 aborts
+  in its X11 fallback when EGL fails), and `--vo=wlshm` when the compositor
+  can't take GPU buffers, which removes corrupted frames, frame drops and audio
+  stutter under software-rendering compositors. The config's own `--vo` or
+  `--gpu-context` still wins. `link-router wayland-globals` for diagnostics.
+- Print-only commands no longer abort when their output is closed
+  (`link-router doctor | head`).
+- Releases ship per-platform archives (binary, `install.sh`, `uninstall.sh`)
+  and `SHA256SUMS`; `install.sh` run from an unpacked archive uses the binary
+  next to it.
 - `install.sh` upgrades an existing installation: it finds it through the
   recorded install path, skips the download when the version is current,
   asks once, keeps the config and interception, refreshes shadow entries with

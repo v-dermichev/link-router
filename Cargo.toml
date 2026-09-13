@@ -1,6 +1,6 @@
 [package]
 name = "link-router"
-version = "0.1.0-beta.3"
+version = "0.1.0-beta.4"
 edition = "2021"
 description = "Extensible link handler: intercepts links at the default browser's desktop entry and routes them"
 license = "MIT"

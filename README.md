@@ -1,12 +1,24 @@
 # link-router
 
-Status: 0.1.0-beta.3. Interception and the `mpv-video` plugin work; most of the
+Status: 0.1.0-beta.4. Interception and the `mpv-video` plugin work; most of the
 design below is not implemented yet (see [MVP status](#mvp-status)).
 
 ## Install
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/v-dermichev/link-router/main/install.sh | sh
+```
+
+Without piping a remote script into a shell: download the archive for your
+system from the [releases](https://github.com/v-dermichev/link-router/releases)
+(`link-router-<version>-x86_64-unknown-linux-musl.tar.gz` or
+`...-x86_64-unknown-freebsd.tar.gz`) and `SHA256SUMS`, then
+
+```sh
+sha256sum -c --ignore-missing SHA256SUMS   # Linux and FreeBSD alike
+tar xzf link-router-*.tar.gz && cd link-router-*/
+less install.sh                            # it's plain POSIX sh
+./install.sh                               # uses the binary in this directory
 ```
 
 The installer:
@@ -125,7 +137,14 @@ Implemented:
   is borderless there), and criteria commands move a running one. A player the
   user made fullscreen is left alone when the next link loads. Elsewhere mpv gets
   `--geometry=WxH-35-25`, which X11 window managers position and Wayland
-  compositors use for the size only.
+  compositors use for the size only. Leaving fullscreen places the window
+  again for the video playing at that moment.
+- mpv output: unless the config chooses `--vo` or `--gpu-context`, a Wayland
+  session gets `--vo=gpu-next,gpu,wlshm --gpu-context=waylandvk,wayland`, or
+  `--vo=wlshm` when the compositor can't take GPU buffers (no
+  `zwp_linux_dmabuf_v1`, e.g. wlroots' pixman renderer), where GPU outputs
+  would render through llvmpipe. `link-router wayland-globals` shows what the
+  compositor offers.
   When the size isn't known in advance (direct links, some yt-dlp results), the
   mpv script reports the demuxed size before mpv creates the window and holds
   playback until the window is placed.

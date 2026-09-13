@@ -34,6 +34,8 @@ struct Daemon {
     in_flight: AtomicUsize,
     last_activity: StdMutex<Instant>,
     log: StdMutex<Option<std::fs::File>>,
+    /// Environment of the latest link, for placing the player between links.
+    session_env: StdMutex<std::collections::BTreeMap<String, String>>,
 }
 
 impl Daemon {
@@ -93,6 +95,7 @@ pub async fn run(resident: bool) -> Result<()> {
         in_flight: AtomicUsize::new(0),
         last_activity: StdMutex::new(Instant::now()),
         log: StdMutex::new(log),
+        session_env: StdMutex::new(Default::default()),
         config,
     });
     d.log(0, &format!("daemon started (pid {}), mpv-video {}", std::process::id(), if d.config.video.enabled { "enabled" } else { "disabled" }));
@@ -302,6 +305,7 @@ async fn play(d: &Arc<Daemon>, msg: &Message, content: &Content) -> Result<Playe
         _ => None,
     };
     let deadline = tokio::time::Instant::now() + Duration::from_secs(cfg.network_timeout as u64 + 12);
+    *d.session_env.lock().unwrap() = msg.env.clone();
 
     let mut guard = d.player.lock().await;
     let running = guard.as_ref().filter(|p| p.alive()).cloned();
@@ -355,6 +359,7 @@ async fn play(d: &Arc<Daemon>, msg: &Message, content: &Content) -> Result<Playe
             let (p, rx) = Player::spawn(cfg, content, &msg.env, geometry, handshake).await?;
             *guard = Some(p.clone());
             spawn_idle_quit(d.clone(), p.clone());
+            spawn_fullscreen_watch(d.clone(), p.clone());
             (p, rx, None, true)
         }
     };
@@ -399,6 +404,55 @@ fn open_fallback(d: &Arc<Daemon>, msg: &Message, url: &str) {
         Ok(()) => d.log(msg.t0_ns, &format!("opened in {id}")),
         Err(e) => d.log(msg.t0_ns, &format!("fallback {id} failed: {e:#}")),
     }
+}
+
+/// When the user leaves fullscreen, compositors restore the window's earlier
+/// size, which fits the video that played before fullscreen. The window is
+/// placed again for the video playing now.
+fn spawn_fullscreen_watch(d: Arc<Daemon>, player: Arc<Player>) {
+    let mut rx = player.subscribe();
+    tokio::spawn(async move {
+        let mut was_fullscreen = false;
+        loop {
+            let Ok(ev) = rx.recv().await else { break };
+            let name = ev.get("event").and_then(Value::as_str).unwrap_or("");
+            if name == "link-router-disconnected" {
+                break;
+            }
+            if name != "property-change" || ev.get("id").and_then(Value::as_u64) != Some(4) {
+                continue;
+            }
+            let fullscreen = ev.get("data").and_then(Value::as_bool) == Some(true);
+            let left = was_fullscreen && !fullscreen;
+            was_fullscreen = fullscreen;
+            if !left {
+                continue;
+            }
+            // Let the compositor finish restoring the old geometry first.
+            tokio::time::sleep(Duration::from_millis(150)).await;
+            let dim = |v: Result<Value>| v.ok().and_then(|v| v.as_u64()).unwrap_or(0) as u32;
+            let (dw, dh) = (
+                dim(player.command(serde_json::json!(["get_property", "video-params/dw"])).await),
+                dim(player.command(serde_json::json!(["get_property", "video-params/dh"])).await),
+            );
+            if dw == 0 || dh == 0 {
+                continue;
+            }
+            let cfg = &d.config.video;
+            let size = hypr::fit((dw, dh), cfg.box_size);
+            let env = d.session_env.lock().unwrap().clone();
+            let placer = placer_for(&d, &env, false).await;
+            if let Err(e) = place(cfg, &placer, Some(&player), false, size).await {
+                d.log(0, &format!("placing window after fullscreen: {e:#}"));
+            }
+            if matches!(placer, Placer::KWin | Placer::Plain) {
+                // mpv only applies `geometry` when a video starts; the window scale resizes now.
+                let scale = size.0 as f64 / dw as f64;
+                let _ = player.command(serde_json::json!(["set_property", "current-window-scale", scale])).await;
+            }
+            d.log(0, &format!("left fullscreen: {}x{} window for {dw}x{dh} video", size.0, size.1));
+        }
+    });
 }
 
 /// Quits the player once it is idle with no link in progress.

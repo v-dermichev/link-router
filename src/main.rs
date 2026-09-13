@@ -9,6 +9,7 @@ mod mpv;
 mod paths;
 mod resolve;
 mod sway;
+mod wayland;
 
 use std::path::Path;
 
@@ -21,6 +22,7 @@ const USAGE: &str = "usage:
   link-router version          print the version
   link-router default-handler SCHEME
                                print the default handler's desktop ID and file for SCHEME links
+  link-router wayland-globals  list the Wayland compositor's globals (diagnostics)
   link-router kwin-script      print the KWin placement script the daemon loads on KDE Plasma
   link-router open URL...      route links from a terminal
   link-router daemon [--resident]
@@ -37,6 +39,13 @@ fn main() {
     if path.parent().and_then(|p| p.file_name()).map(|n| n == "by-id").unwrap_or(false) {
         let id = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
         client::run_by_id(&id, rest);
+    }
+
+    // Print-only commands end quietly when their output is closed (`| head`)
+    // instead of panicking. The others keep SIGPIPE ignored: they write to the
+    // daemon socket and must see EPIPE as an error.
+    if matches!(rest.first().map(String::as_str), Some("doctor" | "version" | "--version" | "-V" | "default-handler" | "kwin-script" | "wayland-globals")) {
+        unsafe { libc::signal(libc::SIGPIPE, libc::SIG_DFL) };
     }
 
     let result = match rest.first().map(String::as_str) {
@@ -71,6 +80,17 @@ fn main() {
                 std::process::exit(1);
             }
         },
+        Some("wayland-globals") => {
+            let env: std::collections::BTreeMap<String, String> = std::env::vars().collect();
+            match wayland::globals(&env) {
+                Some(g) => {
+                    println!("{} globals, GPU buffer sharing: {}", g.len(), wayland::shares_gpu_buffers(&g));
+                    g.iter().for_each(|n| println!("  {n}"));
+                    Ok(())
+                }
+                None => Err(anyhow::anyhow!("no Wayland compositor reachable")),
+            }
+        }
         Some("kwin-script") => {
             let config = config::Config::load();
             print!("{}", kwin::script(&config.video));

@@ -10,7 +10,7 @@
 set -eu
 
 REPO="v-dermichev/link-router"
-DEFAULT_VERSION="0.1.0-beta.3"
+DEFAULT_VERSION="0.1.0-beta.4"
 case "$(uname -s)" in
     FreeBSD) ASSET="link-router-x86_64-unknown-freebsd" ;;
     *) ASSET="link-router-x86_64-unknown-linux-musl" ;;
@@ -43,7 +43,9 @@ mpv), and restarts the registered daemon service.
                    interception while it isn't running)
   --version V      release to install (default $DEFAULT_VERSION; 'latest' for the
                    newest non-prerelease)
-  --binary PATH    install this local binary instead of downloading one
+  --binary PATH    install this local binary instead of downloading one (run
+                   from an unpacked release archive, the binary next to the
+                   script is used without this option)
   --bin-dir DIR    where to put the binary (default ~/.local/bin, or where an
                    existing installation is)
   --reinstall      run the full installation over an existing one
@@ -239,7 +241,7 @@ check_default_browser() {
 }
 
 fetch_binary() {
-    step "Downloading link-router"
+    if [ -n "$BINARY" ]; then step "Checking the binary"; else step "Downloading link-router"; fi
     tmp=$(mktemp -d)
     trap 'rm -rf "$tmp"' EXIT INT TERM
     if [ -n "$BINARY" ]; then
@@ -580,7 +582,8 @@ upgrade() {
 
 main() {
     ASSUME_YES=0 NO_ENABLE=0 NO_CONFIG=0 NO_DEPS=0 BINARY="" SERVICE=auto REINSTALL=0
-    BIN_DIR_GIVEN=0
+    BIN_DIR_GIVEN=0 VERSION_GIVEN=0
+    [ -z "${LINK_ROUTER_VERSION:-}" ] || VERSION_GIVEN=1
     [ -z "${LINK_ROUTER_BIN_DIR:-}" ] || BIN_DIR_GIVEN=1
     SOURCES_GIVEN=0 SRC_YOUTUBE="" SRC_INSTAGRAM="" SRC_DIRECT=""
     VERSION=${LINK_ROUTER_VERSION:-$DEFAULT_VERSION}
@@ -596,7 +599,7 @@ main() {
             --all) SOURCES_GIVEN=1 SRC_YOUTUBE=1 SRC_INSTAGRAM=1 SRC_DIRECT=1 ;;
             --no-deps) NO_DEPS=1 ;;
             --service) [ $# -ge 2 ] || die "--service needs a value"; SERVICE=$2; shift ;;
-            --version) [ $# -ge 2 ] || die "--version needs a value"; VERSION=$2; shift ;;
+            --version) [ $# -ge 2 ] || die "--version needs a value"; VERSION=$2; VERSION_GIVEN=1; shift ;;
             --binary) [ $# -ge 2 ] || die "--binary needs a path"; BINARY=$2; shift ;;
             --bin-dir) [ $# -ge 2 ] || die "--bin-dir needs a path"; BIN_DIR=$2; BIN_DIR_GIVEN=1; shift ;;
             --reinstall) REINSTALL=1 ;;
@@ -608,6 +611,15 @@ main() {
     CONFIG_HOME=${XDG_CONFIG_HOME:-$HOME/.config}
     DATA_HOME=${XDG_DATA_HOME:-$HOME/.local/share}
     STATE_HOME=${XDG_STATE_HOME:-$HOME/.local/state}
+
+    # Run from an unpacked release archive: use the binary shipped beside the script.
+    if [ -z "$BINARY" ] && [ "$VERSION_GIVEN" = 0 ] && [ -f "$0" ]; then
+        here=$(cd "$(dirname "$0")" && pwd)
+        if [ -x "$here/link-router" ] && [ "$here/link-router" != "$BIN_DIR/link-router" ]; then
+            BINARY="$here/link-router"
+            say "Using $BINARY from this archive"
+        fi
+    fi
 
     detect_installation
     if [ -n "$INSTALLED" ] && [ "$REINSTALL" = 0 ]; then
