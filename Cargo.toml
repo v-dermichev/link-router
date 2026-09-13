@@ -1,0 +1,26 @@
+[package]
+name = "link-router"
+version = "0.1.0-beta"
+edition = "2021"
+description = "Extensible link handler: intercepts links at the default browser's desktop entry and routes them"
+license = "MIT"
+
+[dependencies]
+anyhow = "1"
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
+libc = "0.2"
+mlua = { version = "0.10", features = ["lua54", "vendored", "serialize", "send"] }
+quick-xml = "0.39"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-webpki-roots", "http2", "gzip", "brotli", "json", "stream"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.11"
+tokio = { version = "1", features = ["rt-multi-thread", "net", "io-util", "time", "macros", "process", "sync", "fs"] }
+url = "2"
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true
