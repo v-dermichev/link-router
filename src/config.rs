@@ -257,4 +257,18 @@ mod tests {
         assert_eq!(cfg.video.buffer_secs, 2.0);
         assert!(cfg.warnings.iter().any(|w| w.contains("router.route")));
     }
+
+    #[test]
+    fn later_use_overrides_only_given_options() {
+        let mut cfg = Config::default();
+        cfg.apply_lua(
+            r#"
+            router.use("mpv-video", { quality = { max_resolution = 720 } })
+            router.use("mpv-video", { sites = { youtube = true, instagram = false, direct = false } })
+            "#,
+        )
+        .unwrap();
+        assert_eq!(cfg.video.max_resolution, 720);
+        assert!(cfg.video.youtube && !cfg.video.instagram && cfg.video.direct.is_empty());
+    }
 }

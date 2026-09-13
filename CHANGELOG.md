@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.0-beta.2
+
+- `install.sh` asks which links play in mpv on every interactive run, also when
+  a config already exists, and flags apply to existing configs. The choice
+  lives in a marked `router.use("mpv-video", { sites = … })` block at the end
+  of `init.lua`, replaced on each change; the rest of the config is untouched.
+
 ## 0.1.0-beta
 
 First release: the MVP of the design in `docs/`.

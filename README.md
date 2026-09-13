@@ -13,7 +13,8 @@ The installer:
 
 1. asks which links should play in mpv: YouTube, Instagram, direct media links
    (`.mp4`, `.webm`, ...), or takes `--youtube`, `--instagram`, `--direct`,
-   `--all`;
+   `--all`. The choice is a marked block at the end of `init.lua`; rerunning the
+   installer offers to change it and leaves the rest of the config alone;
 2. checks requirements (Linux x86_64, `curl` or `wget`, `sha256sum`, `mpv`;
    `yt-dlp` optional) and offers to install missing packages with pacman, apt,
    dnf, zypper, xbps or apk;

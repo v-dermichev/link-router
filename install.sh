@@ -24,7 +24,8 @@ Usage: install.sh [options]
   --instagram      play Instagram reels and video posts in mpv
   --direct         play direct media links (.mp4, .webm, .mkv, .mov, .m3u8, ...) in mpv
   --all            all of the above; without any of these flags the installer
-                   asks per source (all of them when it can't ask)
+                   asks (a new config gets all of them when it can't ask; an
+                   existing config is then left as it is)
   --no-config      don't write ~/.config/link-router/init.lua (links then pass
                    straight through to the browser)
   --no-deps        never install missing packages (mpv, yt-dlp), only report them
@@ -284,48 +285,89 @@ config_path() { printf '%s\n' "$CONFIG_HOME/link-router/init.lua"; }
 lua_bool() { if [ "$1" = 1 ]; then printf true; else printf false; fi; }
 
 # Decides SRC_YOUTUBE, SRC_INSTAGRAM and SRC_DIRECT (1 or 0) for a new config.
+BLOCK_BEGIN="-- link-router installer: which links play in mpv (rerun install.sh to change)"
+BLOCK_END="-- end of link-router installer block"
+
+# Current value (1 or 0) of a source in the installer block; $2 when there is none.
+current_source() {
+    value=$(sed -n "/^$BLOCK_BEGIN\$/,/^$BLOCK_END\$/p" "$(config_path)" 2>/dev/null | sed -n "s/.*$1 = \([a-z]*\).*/\1/p" | head -n1)
+    case "$value" in
+        true) printf 1 ;;
+        false) printf 0 ;;
+        *) printf '%s' "$2" ;;
+    esac
+}
+
+yn() { if [ "$1" = 1 ]; then printf y; else printf n; fi; }
+
+# Decides SRC_YOUTUBE, SRC_INSTAGRAM, SRC_DIRECT (1 or 0) and SOURCES_CHANGED.
 choose_sources() {
+    SOURCES_CHANGED=0
     [ "$NO_CONFIG" = 0 ] || return 0
-    if [ -f "$(config_path)" ]; then
-        if [ "$SOURCES_GIVEN" = 1 ]; then
-            warn "keeping the existing $(config_path); --youtube/--instagram/--direct/--all only shape a new config (edit 'sites' there instead)"
-        fi
-        return 0
-    fi
+    exists=0
+    [ ! -f "$(config_path)" ] || exists=1
     if [ "$SOURCES_GIVEN" = 1 ]; then
         : "${SRC_YOUTUBE:=0}" "${SRC_INSTAGRAM:=0}" "${SRC_DIRECT:=0}"
+        SOURCES_CHANGED=1
     elif [ "$ASSUME_YES" = 1 ] || ! tty_ok; then
+        # Without a way to ask: a new config gets everything, an existing one stays as it is.
         SRC_YOUTUBE=1 SRC_INSTAGRAM=1 SRC_DIRECT=1
+        [ "$exists" = 1 ] || SOURCES_CHANGED=1
     else
+        SRC_YOUTUBE=$(current_source youtube 1)
+        SRC_INSTAGRAM=$(current_source instagram 1)
+        SRC_DIRECT=$(current_source direct 1)
         step "Which links should play in mpv?"
-        if ask "  YouTube (videos, shorts, live, embeds)?" y; then SRC_YOUTUBE=1; else SRC_YOUTUBE=0; fi
-        if ask "  Instagram (reels, video posts)?" y; then SRC_INSTAGRAM=1; else SRC_INSTAGRAM=0; fi
-        if ask "  Direct media links (.mp4, .webm, .mkv, .mov, .m3u8, ...)?" y; then SRC_DIRECT=1; else SRC_DIRECT=0; fi
+        if [ "$exists" = 1 ]; then
+            say "  $(config_path): youtube=$(lua_bool "$SRC_YOUTUBE") instagram=$(lua_bool "$SRC_INSTAGRAM") direct=$(lua_bool "$SRC_DIRECT")"
+            ask "  Change that?" n || return 0
+        fi
+        if ask "  YouTube (videos, shorts, live, embeds)?" "$(yn "$SRC_YOUTUBE")"; then SRC_YOUTUBE=1; else SRC_YOUTUBE=0; fi
+        if ask "  Instagram (reels, video posts)?" "$(yn "$SRC_INSTAGRAM")"; then SRC_INSTAGRAM=1; else SRC_INSTAGRAM=0; fi
+        if ask "  Direct media links (.mp4, .webm, .mkv, .mov, .m3u8, ...)?" "$(yn "$SRC_DIRECT")"; then SRC_DIRECT=1; else SRC_DIRECT=0; fi
+        SOURCES_CHANGED=1
     fi
-    if [ "$SRC_YOUTUBE$SRC_INSTAGRAM$SRC_DIRECT" = 000 ]; then
+    if [ "$exists" = 0 ] && [ "$SRC_YOUTUBE$SRC_INSTAGRAM$SRC_DIRECT" = 000 ]; then
         say "  no sources chosen: no config is written and every link passes through to the browser"
         NO_CONFIG=1
     fi
+}
+
+# Replaces the installer block at the end of the config, leaving the rest as it is.
+# A later router.use() only overrides the options it sets.
+write_sources_block() {
+    config=$(config_path)
+    tmp_config="$config.new"
+    awk -v begin="$BLOCK_BEGIN" -v end="$BLOCK_END" '
+        $0 == begin { skip = 1; next }
+        $0 == end { skip = 0; next }
+        !skip { print }
+    ' "$config" | awk 'NF { for (; blank > 0; blank--) print ""; print; next } { blank++ }' >"$tmp_config"
+    {
+        printf '\n%s\n' "$BLOCK_BEGIN"
+        printf 'router.use("mpv-video", { sites = { youtube = %s, instagram = %s, direct = %s } })\n' \
+            "$(lua_bool "$SRC_YOUTUBE")" "$(lua_bool "$SRC_INSTAGRAM")" "$(lua_bool "$SRC_DIRECT")"
+        printf '%s\n' "$BLOCK_END"
+    } >>"$tmp_config"
+    chmod "$(stat -c %a "$config" 2>/dev/null || printf 644)" "$tmp_config" 2>/dev/null || true
+    mv -f "$tmp_config" "$config"
 }
 
 write_config() {
     [ "$NO_CONFIG" = 0 ] || return 0
     config=$(config_path)
     step "Config"
-    if [ -f "$config" ]; then
-        say "  keeping $config"
-        return 0
-    fi
-    mkdir -p "$CONFIG_HOME/link-router"
-    cat >"$config" <<EOF
+    if [ ! -f "$config" ]; then
+        mkdir -p "$CONFIG_HOME/link-router"
+        cat >"$config" <<'EOF'
 -- link-router config. Changes apply when the daemon restarts: run
--- \`link-router stop\`; the service manager or the next link starts it again.
+-- `link-router stop`; the service manager or the next link starts it again.
 
 router.use("mpv-video", {
   player = {
     -- Extra mpv arguments, e.g. { "--vo=gpu-next", "--hwdec=vaapi" }.
     args = {},
-    -- Extra environment for mpv; \`false\` unsets a variable.
+    -- Extra environment for mpv; `false` unsets a variable.
     -- Hybrid-GPU laptops rendering on Intel: { LIBVA_DRIVER_NAME = "iHD" }.
     env = {},
   },
@@ -338,15 +380,17 @@ router.use("mpv-video", {
     box = { 960, 720 },    -- the video is fitted into this box
     margin = { 35, 25 },   -- from the bottom-right corner
   },
-  sites = {
-    youtube = $(lua_bool "$SRC_YOUTUBE"),
-    instagram = $(lua_bool "$SRC_INSTAGRAM"),
-    -- true for the built-in extension list, false, or a list: { "mp4", "webm" }
-    direct = $(lua_bool "$SRC_DIRECT"),
-  },
+  -- Which links play is set by the installer block below. `direct` also takes
+  -- a list of extensions: { "mp4", "webm" }.
 })
 EOF
-    say "  wrote $config (youtube=$(lua_bool "$SRC_YOUTUBE") instagram=$(lua_bool "$SRC_INSTAGRAM") direct=$(lua_bool "$SRC_DIRECT"))"
+        say "  wrote $config"
+    elif [ "$SOURCES_CHANGED" = 0 ]; then
+        say "  keeping $config"
+        return 0
+    fi
+    write_sources_block
+    say "  sources: youtube=$(lua_bool "$SRC_YOUTUBE") instagram=$(lua_bool "$SRC_INSTAGRAM") direct=$(lua_bool "$SRC_DIRECT")"
 }
 
 enable_interception() {
