@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.0-beta.4
+
+- `install.sh` upgrades an existing installation: it finds it through the
+  recorded install path, skips the download when the version is current,
+  asks once, keeps the config and interception, refreshes shadow entries with
+  the sentinel and restarts the registered service (systemd, OpenRC or
+  autostart). `--reinstall` runs the full installation.
+
 ## 0.1.0-beta.3
 
 - KDE: fullscreen and maximized players are no longer pushed back into the

@@ -30,6 +30,13 @@ The installer:
    (Hyprland, sway, niri, river) need
    `link-router daemon --resident` in their own startup list.
 
+Run the same command again to upgrade: with link-router already installed
+(found through its recorded install path, so a custom `--bin-dir` is kept),
+the installer only downloads when the version differs, asks once, swaps the
+binary, keeps the config and interception as they are (it offers to change
+which links play in mpv), refreshes the shadow entries and restarts the
+registered service. `--reinstall` runs the full installation instead.
+
 A resident daemon matters: its sentinel re-points interception when a browser
 makes itself the default. Without it (`--service none`) the first link starts
 the daemon, which exits after 30 idle minutes.
@@ -37,7 +44,7 @@ the daemon, which exits after 30 idle minutes.
 Nothing outside your home directory changes except packages you agree to
 install. Options go after `sh -s --`, e.g. `| sh -s -- --yes --all`: `--yes`,
 `--no-enable`, `--no-config`, `--no-deps`, `--service KIND`, `--version V`,
-`--bin-dir DIR`; `sh install.sh --help` lists them.
+`--bin-dir DIR`, `--reinstall`; `sh install.sh --help` lists them.
 
 Uninstall (restores the browser entries, removes the service, binary, data and
 logs; keeps the config unless `--purge`):

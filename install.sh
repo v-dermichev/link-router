@@ -20,6 +20,11 @@ usage() {
     cat <<EOF
 Usage: install.sh [options]
 
+When link-router is already installed, the script upgrades it: it replaces the
+binary (nothing is downloaded when the version is already current), keeps the
+config and interception as they are (offering to change which links play in
+mpv), and restarts the registered daemon service.
+
   --yes            don't ask: accept defaults and let link-router take over a
                    browser desktop entry you customised (restored by 'disable')
   --no-enable      install only; run 'link-router enable' yourself later
@@ -39,7 +44,9 @@ Usage: install.sh [options]
   --version V      release to install (default $DEFAULT_VERSION; 'latest' for the
                    newest non-prerelease)
   --binary PATH    install this local binary instead of downloading one
-  --bin-dir DIR    where to put the binary (default ~/.local/bin)
+  --bin-dir DIR    where to put the binary (default ~/.local/bin, or where an
+                   existing installation is)
+  --reinstall      run the full installation over an existing one
   -h, --help       show this help
 
 Environment: LINK_ROUTER_VERSION, LINK_ROUTER_BIN_DIR, LINK_ROUTER_BASE_URL
@@ -502,8 +509,79 @@ finish() {
     say "Uninstall: curl -fsSL https://raw.githubusercontent.com/$REPO/main/uninstall.sh | sh"
 }
 
+# Sets INSTALLED to the binary of an existing installation ("" when none) and
+# points BIN_DIR at its directory unless one was given.
+detect_installation() {
+    INSTALLED=""
+    state="$STATE_HOME/link-router/state.json"
+    recorded=$(sed -n 's/.*"install_path": *"\([^"]*\)".*/\1/p' "$state" 2>/dev/null | head -n1)
+    if [ "$BIN_DIR_GIVEN" = 0 ] && [ -n "$recorded" ] && [ -x "$recorded" ]; then
+        BIN_DIR=$(dirname "$recorded")
+    fi
+    if [ -x "$BIN_DIR/link-router" ]; then
+        INSTALLED="$BIN_DIR/link-router"
+    fi
+}
+
+# The service kind an earlier installation registered, "" when none.
+registered_service() {
+    if [ -f "$CONFIG_HOME/systemd/user/link-router.service" ]; then printf systemd
+    elif [ -f "$CONFIG_HOME/rc/init.d/link-router" ]; then printf openrc
+    elif [ -f "$CONFIG_HOME/autostart/link-router.desktop" ]; then printf autostart
+    fi
+}
+
+upgrade() {
+    current=$("$INSTALLED" version 2>/dev/null | cut -d' ' -f2)
+    step "link-router ${current:-(unknown version)} is installed in $BIN_DIR"
+    known=""
+    [ -n "$BINARY" ] || [ "$VERSION" = latest ] || known=${VERSION#v}
+    if [ -n "$known" ]; then
+        if [ "$known" = "$current" ]; then
+            say "  already up to date (--reinstall runs the full installation again)"
+            return 0
+        fi
+        ask "Install $known over ${current:-the installed version}?" y || die "aborted"
+    fi
+    fetch_binary
+    target=$("$tmp/$ASSET" version | cut -d' ' -f2)
+    if [ "$target" = "$current" ]; then
+        say "  already up to date (--reinstall runs the full installation again)"
+        return 0
+    fi
+    [ -n "$known" ] || ask "Install $target over ${current:-the installed version}?" y || die "aborted"
+    choose_sources
+    install_binary
+    write_config
+    step "Interception"
+    # The sentinel refreshes shadows for the new binary and does nothing when
+    # interception was disabled; it never takes over a customised entry.
+    refreshed=$("$BIN_DIR/link-router" sentinel)
+    if [ -n "$refreshed" ]; then
+        printf '%s\n' "$refreshed" | sed 's/^/  /'
+    else
+        say "  unchanged"
+    fi
+    kind=$SERVICE
+    [ "$kind" != auto ] || kind=$(registered_service)
+    if [ -n "$kind" ]; then
+        SERVICE=$kind
+        register_service
+    else
+        step "Daemon"
+        say "  no service registered: the next link starts the new daemon"
+    fi
+    step "Status"
+    sleep 1
+    "$BIN_DIR/link-router" doctor || true
+    say ""
+    say "Now link-router $target (was ${current:-unknown}). Changes: https://github.com/$REPO/blob/main/CHANGELOG.md"
+}
+
 main() {
-    ASSUME_YES=0 NO_ENABLE=0 NO_CONFIG=0 NO_DEPS=0 BINARY="" SERVICE=auto
+    ASSUME_YES=0 NO_ENABLE=0 NO_CONFIG=0 NO_DEPS=0 BINARY="" SERVICE=auto REINSTALL=0
+    BIN_DIR_GIVEN=0
+    [ -z "${LINK_ROUTER_BIN_DIR:-}" ] || BIN_DIR_GIVEN=1
     SOURCES_GIVEN=0 SRC_YOUTUBE="" SRC_INSTAGRAM="" SRC_DIRECT=""
     VERSION=${LINK_ROUTER_VERSION:-$DEFAULT_VERSION}
     BIN_DIR=${LINK_ROUTER_BIN_DIR:-${HOME:-}/.local/bin}
@@ -520,7 +598,8 @@ main() {
             --service) [ $# -ge 2 ] || die "--service needs a value"; SERVICE=$2; shift ;;
             --version) [ $# -ge 2 ] || die "--version needs a value"; VERSION=$2; shift ;;
             --binary) [ $# -ge 2 ] || die "--binary needs a path"; BINARY=$2; shift ;;
-            --bin-dir) [ $# -ge 2 ] || die "--bin-dir needs a path"; BIN_DIR=$2; shift ;;
+            --bin-dir) [ $# -ge 2 ] || die "--bin-dir needs a path"; BIN_DIR=$2; BIN_DIR_GIVEN=1; shift ;;
+            --reinstall) REINSTALL=1 ;;
             -h | --help) usage; exit 0 ;;
             *) usage >&2; die "unknown option: $1" ;;
         esac
@@ -530,6 +609,11 @@ main() {
     DATA_HOME=${XDG_DATA_HOME:-$HOME/.local/share}
     STATE_HOME=${XDG_STATE_HOME:-$HOME/.local/state}
 
+    detect_installation
+    if [ -n "$INSTALLED" ] && [ "$REINSTALL" = 0 ]; then
+        upgrade
+        return 0
+    fi
     choose_sources
     check_requirements
     fetch_binary
