@@ -2,6 +2,20 @@
 
 ## 0.1.0-beta.2
 
+- KDE Plasma 6: a KWin script, loaded over D-Bus once per daemon (reloaded
+  after a KWin restart), anchors the player bottom-right, keeps it above other
+  windows and moves it to the current desktop and screen for each new video.
+  `link-router kwin-script` prints it. Untested on a real Plasma session yet.
+- KDE's `BrowserApplication` counts as the default browser when no http(s)
+  scheme handler is set (KIO uses it only then); `doctor` warns about the
+  `!command` form, which can't be intercepted.
+- Without Hyprland, a new player now gets the fitted size also when the video
+  size is only known once the stream opens (direct links); before, the window
+  opened at the video's own size. mpv gets `--geometry=WxH-35-25` and
+  `--x11-name`, so X11 window managers place it bottom-right.
+- `link-router default-handler SCHEME`; the installer uses it (with the
+  downloaded binary, before installing) to report the default browser the way
+  link-router resolves it.
 - `install.sh` asks which links play in mpv on every interactive run, also when
   a config already exists, and flags apply to existing configs. The choice
   lives in a marked `router.use("mpv-video", { sites = … })` block at the end

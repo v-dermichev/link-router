@@ -10,7 +10,7 @@
 set -eu
 
 REPO="v-dermichev/link-router"
-DEFAULT_VERSION="0.1.0-beta"
+DEFAULT_VERSION="0.1.0-beta.2"
 ASSET="link-router-x86_64-unknown-linux-musl"
 
 usage() {
@@ -154,21 +154,6 @@ fetch() {
     fi
 }
 
-# Desktop file for an ID, searched like the XDG spec does.
-find_desktop_file() {
-    old_ifs=$IFS
-    IFS=:
-    for dir in "$DATA_HOME" ${XDG_DATA_DIRS:-/usr/local/share:/usr/share}; do
-        if [ -f "$dir/applications/$1" ]; then
-            IFS=$old_ifs
-            printf '%s\n' "$dir/applications/$1"
-            return 0
-        fi
-    done
-    IFS=$old_ifs
-    return 1
-}
-
 check_requirements() {
     step "Checking requirements"
     errors=0
@@ -218,20 +203,15 @@ check_requirements() {
 
 check_default_browser() {
     step "Checking the default browser"
-    id=""
-    if has xdg-mime; then
-        id=$(xdg-mime query default x-scheme-handler/https 2>/dev/null || true)
-    fi
-    if [ -z "$id" ]; then
-        if has xdg-mime; then
-            warn "no default handler for https links; set your browser first, e.g. 'xdg-settings set default-web-browser firefox.desktop'"
-            ask "Continue anyway? link-router will intercept once a default exists." n || die "aborted"
-        else
-            say "  xdg-mime not found; skipping ('link-router doctor' reports it after installation)"
-        fi
+    # The binary resolves the default the way link-router will (XDG lookup order,
+    # KDE's BrowserApplication fallback), before anything is installed.
+    if ! found=$("$tmp/$ASSET" default-handler https); then
+        warn "no default handler for https links; set your browser first, e.g. 'xdg-settings set default-web-browser firefox.desktop'"
+        ask "Continue anyway? link-router will intercept once a default exists." n || die "aborted"
         return 0
     fi
-    file=$(find_desktop_file "$id" || true)
+    id=$(printf '%s' "$found" | cut -f1)
+    file=$(printf '%s' "$found" | cut -f2)
     say "  https links open with: $id${file:+ ($file)}"
     if [ -n "$file" ] && grep -q '^X-Link-Router-Shadow=' "$file"; then
         say "  already intercepted by link-router"
@@ -243,9 +223,8 @@ check_default_browser() {
     fi
 }
 
-install_binary() {
-    step "Installing the binary"
-    mkdir -p "$BIN_DIR"
+fetch_binary() {
+    step "Downloading link-router"
     tmp=$(mktemp -d)
     trap 'rm -rf "$tmp"' EXIT INT TERM
     if [ -n "$BINARY" ]; then
@@ -259,7 +238,7 @@ install_binary() {
         else
             base="https://github.com/$REPO/releases/download/v${VERSION#v}"
         fi
-        say "  downloading $base/$ASSET"
+        say "  $base/$ASSET"
         fetch "$base/$ASSET" "$tmp/$ASSET" || die "download failed: $base/$ASSET"
         fetch "$base/$ASSET.sha256" "$tmp/$ASSET.sha256" || die "download failed: $base/$ASSET.sha256"
         expected=$(cut -d' ' -f1 <"$tmp/$ASSET.sha256")
@@ -269,7 +248,11 @@ install_binary() {
     fi
     chmod 755 "$tmp/$ASSET"
     "$tmp/$ASSET" version >/dev/null 2>&1 || die "the binary doesn't run on this system"
+}
 
+install_binary() {
+    step "Installing the binary"
+    mkdir -p "$BIN_DIR"
     if [ -x "$BIN_DIR/link-router" ]; then
         say "  replacing $("$BIN_DIR/link-router" version 2>/dev/null || echo 'an existing install')"
         "$BIN_DIR/link-router" stop >/dev/null 2>&1 || true
@@ -284,7 +267,6 @@ config_path() { printf '%s\n' "$CONFIG_HOME/link-router/init.lua"; }
 
 lua_bool() { if [ "$1" = 1 ]; then printf true; else printf false; fi; }
 
-# Decides SRC_YOUTUBE, SRC_INSTAGRAM and SRC_DIRECT (1 or 0) for a new config.
 BLOCK_BEGIN="-- link-router installer: which links play in mpv (rerun install.sh to change)"
 BLOCK_END="-- end of link-router installer block"
 
@@ -542,6 +524,7 @@ main() {
 
     choose_sources
     check_requirements
+    fetch_binary
     check_default_browser
     install_binary
     write_config

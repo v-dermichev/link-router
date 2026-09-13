@@ -1,6 +1,6 @@
 # link-router
 
-Status: 0.1.0-beta. Interception and the `mpv-video` plugin work; most of the
+Status: 0.1.0-beta.2. Interception and the `mpv-video` plugin work; most of the
 design below is not implemented yet (see [MVP status](#mvp-status)).
 
 ## Install
@@ -70,6 +70,7 @@ about video or any site; plugins do.
 | [docs/plugins.md](docs/plugins.md) | Plugin model: structure, loading, names, overriding, first-party plugins |
 | [docs/plugins/mpv-video.md](docs/plugins/mpv-video.md) | The `mpv-video` plugin: resolvers for YouTube, Instagram and yt-dlp, the mpv target, player settings, timing budget |
 | [docs/integration.md](docs/integration.md) | Interception (shadow entries, sentinel, state, doctor), app drivers (mpv), desktop launcher, compositor adapters |
+| [docs/testing-kde.md](docs/testing-kde.md) | Checklist for a first test on KDE Plasma |
 | [docs/decisions.md](docs/decisions.md) | Decision log, prior art, rejected alternatives, open questions |
 | [examples/init.lua](examples/init.lua) | A config reproducing `open-url`, plus three inline routes |
 | [examples/hyprland-rule.lua](examples/hyprland-rule.lua) | Hyprland window rule for the video player |
@@ -78,7 +79,8 @@ about video or any site; plugins do.
 
 Build from source: `CC_x86_64_unknown_linux_musl=musl-gcc cargo build --release --target x86_64-unknown-linux-musl`,
 then `sh install.sh --binary target/x86_64-unknown-linux-musl/release/link-router`.
-Releases attach that binary and its `.sha256`.
+Releases attach that binary and its `.sha256`. Tests: `cargo test`, and for the
+KWin script `link-router kwin-script | node tests/kwin-placement.mjs`.
 
 Implemented:
 
@@ -107,9 +109,15 @@ Implemented:
 - Placement: with Hyprland, a runtime window rule sets the floating size and
   position before mpv is started, so the first map already has the final
   geometry; a running player is resized and moved before the next file loads.
+  On KDE Plasma 6, mpv sizes the window from `geometry` and a KWin script
+  loaded over D-Bus anchors it bottom-right, keeps it above other windows and
+  follows the current desktop (not yet tested on a real Plasma session; see
+  [docs/testing-kde.md](docs/testing-kde.md)). Elsewhere mpv gets
+  `--geometry=WxH-35-25`, which X11 window managers position and Wayland
+  compositors use for the size only.
   When the size isn't known in advance (direct links, some yt-dlp results), the
   mpv script reports the demuxed size before mpv creates the window and holds
-  playback until the window is placed. Without Hyprland, mpv gets `--geometry`.
+  playback until the window is placed.
 - Failures: a `Definitive` or not-a-video resolver result, or a player that
   can't start, opens the original handler; transient resolver failures and
   streams that fail to play move on to the next resolver.

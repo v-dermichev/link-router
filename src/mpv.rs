@@ -158,6 +158,13 @@ fn per_file_options(content: &Content, cfg: &VideoConfig) -> serde_json::Map<Str
     o
 }
 
+/// mpv `geometry` for a window of `size` anchored bottom-right with `margin`
+/// (`-x` counts from the right edge, `--x` beyond it). Wayland compositors
+/// ignore the position; X11 window managers use it.
+pub fn geometry((w, h): (u32, u32), (mx, my): (i32, i32)) -> String {
+    format!("{w}x{h}-{mx}-{my}")
+}
+
 impl Player {
     pub fn alive(&self) -> bool {
         self.alive.load(Ordering::SeqCst)
@@ -184,6 +191,7 @@ impl Player {
         let mut args: Vec<String> = cfg.args.clone();
         args.extend([
             format!("--wayland-app-id={}", cfg.app_id),
+            format!("--x11-name={}", cfg.app_id),
             format!("--input-ipc-server={}", socket.display()),
             "--idle=yes".into(),
             "--ytdl=no".into(),
@@ -202,8 +210,8 @@ impl Player {
         if place {
             args.push("--script-opts-append=link-router-place=yes".into());
         }
-        if let Some((w, h)) = geometry {
-            args.push(format!("--geometry={w}x{h}"));
+        if let Some(size) = geometry {
+            args.push(format!("--geometry={}", self::geometry(size, cfg.margin)));
         }
         args.push("--{".into());
         for (k, v) in per_file_options(content, cfg) {
@@ -372,6 +380,12 @@ pub async fn wait_outcome(rx: &mut broadcast::Receiver<Value>, entry: Option<u64
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn geometry_anchors_bottom_right() {
+        assert_eq!(geometry((960, 540), (35, 25)), "960x540-35-25");
+        assert_eq!(geometry((405, 720), (0, 0)), "405x720-0-0");
+    }
 
     #[test]
     fn escapes_header_list_separators() {

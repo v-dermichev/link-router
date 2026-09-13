@@ -103,7 +103,7 @@ pub fn run_open(urls: Vec<String>) -> Result<()> {
     let t0 = monotonic_ns();
     let state = State::load();
     let scheme = urls.first().and_then(|u| u.split_once(':')).map(|(s, _)| s.to_lowercase()).ok_or_else(|| anyhow!("no URL"))?;
-    let fallback_id = desktop::default_for(&format!("x-scheme-handler/{scheme}"));
+    let fallback_id = desktop::default_handler(&scheme);
     let msg = Message { v: PROTOCOL_VERSION, cmd: None, urls: urls.clone(), fallback_id: fallback_id.clone(), t0_ns: t0, env: forwarded_env() };
     let install = state.install_path.clone().or_else(|| std::env::current_exe().ok());
     match send(&msg, install.as_deref()) {

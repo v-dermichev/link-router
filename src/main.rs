@@ -4,6 +4,7 @@ mod daemon;
 mod desktop;
 mod hypr;
 mod intercept;
+mod kwin;
 mod mpv;
 mod paths;
 mod resolve;
@@ -17,6 +18,9 @@ const USAGE: &str = "usage:
   link-router doctor           show interception status
   link-router stop             stop the daemon (the next link starts it again)
   link-router version          print the version
+  link-router default-handler SCHEME
+                               print the default handler's desktop ID and file for SCHEME links
+  link-router kwin-script      print the KWin placement script the daemon loads on KDE Plasma
   link-router open URL...      route links from a terminal
   link-router daemon [--resident]
                                run the daemon (started on demand by the client;
@@ -51,6 +55,24 @@ fn main() {
         Some("doctor") => intercept::doctor(),
         Some("stop") => {
             client::shutdown_daemon();
+            Ok(())
+        }
+        Some("default-handler") => match rest.get(1).and_then(|scheme| desktop::default_handler(scheme)) {
+            Some(id) => {
+                let path = desktop::find_entry(&id).map(|p| p.display().to_string()).unwrap_or_default();
+                println!("{id}\t{path}");
+                Ok(())
+            }
+            None => {
+                if let Some(cmd) = desktop::kde_browser_setting().filter(|v| v.starts_with('!')) {
+                    eprintln!("KDE's browser is the command '{}', which can't be intercepted", &cmd[1..]);
+                }
+                std::process::exit(1);
+            }
+        },
+        Some("kwin-script") => {
+            let config = config::Config::load();
+            print!("{}", kwin::script(&config.video));
             Ok(())
         }
         Some("version" | "--version" | "-V") => {

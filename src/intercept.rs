@@ -179,7 +179,7 @@ fn write_atomic(path: &Path, text: &str) -> Result<()> {
 
 /// Default handler IDs of every intercepted scheme.
 pub fn default_ids() -> BTreeSet<String> {
-    SCHEMES.iter().filter_map(|s| desktop::default_for(&format!("x-scheme-handler/{s}"))).collect()
+    SCHEMES.iter().filter_map(|s| desktop::default_handler(s)).collect()
 }
 
 /// What to do with the user's own unmarked override of a default entry.
@@ -368,7 +368,7 @@ pub fn doctor() -> Result<()> {
     println!("install path: {}", state.install_path.as_ref().map(|p| p.display().to_string()).unwrap_or("-".into()));
     for scheme in SCHEMES {
         let mime = format!("x-scheme-handler/{scheme}");
-        match desktop::default_for(&mime) {
+        match desktop::default_handler(scheme) {
             None => println!("{mime}: no default handler"),
             Some(id) => {
                 let effective = desktop::find_entry(&id);
@@ -384,6 +384,12 @@ pub fn doctor() -> Result<()> {
                     println!("  xdg-settings check default-web-browser {id}: {}", String::from_utf8_lossy(&out.stdout).trim());
                 }
             }
+        }
+    }
+    if let Some(kde) = desktop::kde_browser_setting().filter(|v| !v.is_empty()) {
+        println!("KDE BrowserApplication: {kde}");
+        if kde.starts_with('!') {
+            println!("warning: a command as KDE browser can't be intercepted; KDE apps use it only when no http(s) default handler is set");
         }
     }
     if let Ok(b) = std::env::var("BROWSER") {

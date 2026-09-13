@@ -18,6 +18,7 @@ use crate::client::{self, Message, ACK, NAK, PROTOCOL_VERSION};
 use crate::config::{Config, VideoConfig};
 use crate::desktop;
 use crate::hypr::{self, Hypr};
+use crate::kwin;
 use crate::intercept::{self, State, UserOverride};
 use crate::mpv::{self, Outcome, Player};
 use crate::paths;
@@ -221,19 +222,50 @@ enum Played {
     StreamFailed(String),
 }
 
-/// Sizes and positions the player window. A new player's window isn't mapped
-/// yet, so a compositor rule places it on map; a running player's window is
-/// moved directly. Without a compositor adapter mpv's own geometry is used.
-async fn place(cfg: &VideoConfig, hypr: Option<&Hypr>, monitor: Option<&hypr::Monitor>, player: Option<&Player>, size: (u32, u32)) -> Result<()> {
-    match (hypr, monitor, player) {
-        (Some(h), Some(m), None) => h.set_rule(&cfg.app_id, size, hypr::anchor(m, size, cfg.margin).0).await,
-        (Some(h), Some(m), Some(p)) => {
+/// How the player window gets placed for the session a link came from.
+enum Placer {
+    /// A runtime window rule for a new window, dispatches for a running one.
+    Hyprland(Hypr, hypr::Monitor),
+    /// mpv sizes the window from `geometry`; KWin's placement script positions it.
+    KWin,
+    /// mpv's `geometry` with bottom-right offsets (position honoured on X11 only).
+    Plain,
+}
+
+async fn placer_for(d: &Daemon, env: &std::collections::BTreeMap<String, String>, spawning: bool) -> Placer {
+    if let Some(h) = Hypr::from_env(env) {
+        if let Ok(m) = h.focused_monitor().await {
+            return Placer::Hyprland(h, m);
+        }
+    }
+    if kwin::is_kde(env) {
+        if !spawning {
+            return Placer::KWin;
+        }
+        match kwin::ensure_script(&d.config.video, env).await {
+            Ok(()) => return Placer::KWin,
+            Err(e) => d.log(0, &format!("KWin placement script unavailable: {e:#}")),
+        }
+    }
+    Placer::Plain
+}
+
+/// Sizes and positions the player window for `size`. `player` is `None` before
+/// a new player is started (the size then goes on its command line), and
+/// `fresh` means its window isn't mapped yet.
+async fn place(cfg: &VideoConfig, placer: &Placer, player: Option<&Player>, fresh: bool, size: (u32, u32)) -> Result<()> {
+    match (placer, player) {
+        (Placer::Hyprland(h, m), _) if fresh => h.set_rule(&cfg.app_id, size, hypr::anchor(m, size, cfg.margin).0).await,
+        (Placer::Hyprland(h, m), Some(p)) => {
             if let Some(c) = h.client(&cfg.app_id, p.pid).await? {
                 h.resize_move(&c.address, size, hypr::anchor(m, size, cfg.margin).1).await?;
             }
             Ok(())
         }
-        (_, _, Some(p)) => p.command(serde_json::json!(["set_property", "geometry", format!("{}x{}", size.0, size.1)])).await.map(|_| ()),
+        (_, Some(p)) => p
+            .command(serde_json::json!(["set_property", "geometry", mpv::geometry(size, cfg.margin)]))
+            .await
+            .map(|_| ()),
         _ => Ok(()),
     }
 }
@@ -245,29 +277,29 @@ async fn play(d: &Arc<Daemon>, msg: &Message, content: &Content) -> Result<Playe
         (Some(w), Some(h)) if w > 0 && h > 0 => Some(hypr::fit((w, h), cfg.box_size)),
         _ => None,
     };
-    let hypr = Hypr::from_env(&msg.env);
-    let monitor = match &hypr {
-        Some(h) => h.focused_monitor().await.ok(),
-        None => None,
-    };
     let deadline = tokio::time::Instant::now() + Duration::from_secs(cfg.network_timeout as u64 + 12);
 
     let mut guard = d.player.lock().await;
+    let running = guard.as_ref().filter(|p| p.alive()).cloned();
+    let mut placer = placer_for(d, &msg.env, running.is_none()).await;
     let mut existing = None;
-    if let Some(p) = guard.as_ref().filter(|p| p.alive()).cloned() {
-        if let (Some(h), Some(m), true) = (&hypr, &monitor, cfg.follow_focus) {
+    if let Some(p) = running {
+        if let (Placer::Hyprland(h, m), true) = (&placer, cfg.follow_focus) {
             if let Ok(Some(c)) = h.client(&cfg.app_id, p.pid).await {
                 let _ = h.move_to_workspace(&c.address, &m.workspace).await;
             }
         }
         if let Some(size) = known {
-            let _ = place(cfg, hypr.as_ref(), monitor.as_ref(), Some(&p), size).await;
+            let _ = place(cfg, &placer, Some(&p), false, size).await;
         }
         let rx = p.subscribe();
         match p.load(content, cfg, known.is_none()).await {
             Ok(entry) => existing = Some((p, rx, entry)),
             // Typically a player quitting on idle just as the link arrived.
-            Err(e) => d.log(msg.t0_ns, &format!("running player unusable ({e:#}), starting a new one")),
+            Err(e) => {
+                d.log(msg.t0_ns, &format!("running player unusable ({e:#}), starting a new one"));
+                placer = placer_for(d, &msg.env, true).await;
+            }
         }
     }
     let (player, mut rx, entry, fresh) = match existing {
@@ -275,10 +307,9 @@ async fn play(d: &Arc<Daemon>, msg: &Message, content: &Content) -> Result<Playe
         None => {
             let mut geometry = None;
             if let Some(size) = known {
-                if hypr.is_some() && monitor.is_some() {
-                    place(cfg, hypr.as_ref(), monitor.as_ref(), None, size).await?;
-                } else {
-                    geometry = Some(size);
+                match placer {
+                    Placer::Hyprland(..) => place(cfg, &placer, None, true, size).await?,
+                    _ => geometry = Some(size),
                 }
             }
             let (p, rx) = Player::spawn(cfg, content, &msg.env, geometry, known.is_none()).await?;
@@ -296,8 +327,7 @@ async fn play(d: &Arc<Daemon>, msg: &Message, content: &Content) -> Result<Playe
         match mpv::wait_outcome(&mut rx, entry, deadline).await {
             Outcome::Size { seq, width, height } => {
                 let size = hypr::fit((width, height), cfg.box_size);
-                let target = if fresh { None } else { Some(player.as_ref()) };
-                if let Err(e) = place(cfg, hypr.as_ref(), monitor.as_ref(), target, size).await {
+                if let Err(e) = place(cfg, &placer, Some(player.as_ref()), fresh, size).await {
                     d.log(msg.t0_ns, &format!("placing window: {e:#}"));
                 }
                 player.placed(seq).await;
@@ -314,7 +344,7 @@ fn open_fallback(d: &Arc<Daemon>, msg: &Message, url: &str) {
     let state = State::load();
     let id = msg.fallback_id.clone().or_else(|| {
         let scheme = url.split_once(':').map(|(s, _)| s.to_lowercase())?;
-        desktop::default_for(&format!("x-scheme-handler/{scheme}"))
+        desktop::default_handler(&scheme)
     });
     let Some(id) = id else {
         d.log(msg.t0_ns, "no fallback handler");

@@ -232,6 +232,45 @@ pub fn default_for(mime: &str) -> Option<String> {
     None
 }
 
+/// KDE's `[General] BrowserApplication` from kdeglobals, as written: a desktop
+/// entry ID (`firefox.desktop`, older configs without `.desktop`) or `!command`.
+pub fn kde_browser_setting() -> Option<String> {
+    let mut files = vec![paths::config_home().join("kdeglobals")];
+    files.extend(paths::config_dirs().into_iter().map(|d| d.join("kdeglobals")));
+    files.iter().filter_map(|f| fs::read_to_string(f).ok()).find_map(|text| kde_general_value(&text, "BrowserApplication"))
+}
+
+fn kde_general_value(text: &str, key: &str) -> Option<String> {
+    let mut in_general = false;
+    for line in text.lines().map(str::trim) {
+        if line.starts_with('[') {
+            in_general = line == "[General]";
+        } else if in_general {
+            if let Some((k, v)) = line.split_once('=') {
+                // KConfig keys may carry flags such as `Key[$e]`.
+                if k.trim().split('[').next() == Some(key) {
+                    return Some(v.trim().to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Default handler ID for links of `scheme`. KIO opens http(s) links with KDE's
+/// BrowserApplication when no scheme handler is set, so that counts as the
+/// default then (the `!command` form has no entry to intercept).
+pub fn default_handler(scheme: &str) -> Option<String> {
+    default_for(&format!("x-scheme-handler/{scheme}")).or_else(|| {
+        if scheme != "http" && scheme != "https" {
+            return None;
+        }
+        let value = kde_browser_setting().filter(|v| !v.is_empty() && !v.starts_with('!'))?;
+        let id = if value.ends_with(".desktop") { value } else { format!("{value}.desktop") };
+        find_entry(&id).map(|_| id)
+    })
+}
+
 pub fn which(cmd: &str) -> Option<PathBuf> {
     if cmd.contains('/') {
         let p = PathBuf::from(cmd);
@@ -313,6 +352,13 @@ mod tests {
         assert_eq!(out, vec!["b", "https://a/", "file:///tmp/f.txt", "--icon", "b", "%"]);
         let out = expand_exec(&["b".into(), "%F".into()], &urls, &e);
         assert_eq!(out, vec!["b", "https://a/", "/tmp/f.txt"]);
+    }
+
+    #[test]
+    fn reads_kde_general_keys() {
+        let text = "[Colors:View]\nBrowserApplication=no\n[General]\nBrowserApplication[$e]=firefox.desktop\n";
+        assert_eq!(kde_general_value(text, "BrowserApplication").as_deref(), Some("firefox.desktop"));
+        assert_eq!(kde_general_value("[General]\nOther=1\n", "BrowserApplication"), None);
     }
 
     #[test]
