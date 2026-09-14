@@ -1,7 +1,63 @@
 # link-router
 
-Status: 0.1.0-beta.4. Interception and the `mpv-video` plugin work; most of the
-design below is not implemented yet (see [MVP status](#mvp-status)).
+Open each link in the app that suits it, not always in the browser.
+
+Every link you click on a desktop, in a chat app, a terminal, an email, a PDF
+or a notes app, goes to one place: your default browser. The desktop's
+defaults work per scheme, so all `https://` links go to the same app. There is
+no way to say "YouTube videos go to a video player, everything else goes to
+the browser".
+
+link-router adds that decision. It sits in front of your browser and looks at
+each link as it is clicked. A link it knows how to handle better opens there;
+every other link, and every link it fails to handle, reaches your browser
+exactly as it would have without link-router.
+
+## What it does today
+
+With the bundled `mpv-video` plugin:
+
+- **YouTube** videos and Shorts, **Instagram** reels and **direct media
+  links** (`.mp4`, `.webm`, `.mkv`, ...) play in a small floating
+  [mpv](https://mpv.io) window in the corner of the screen. There's no browser
+  tab, no page to load, and no account or cookies are involved.
+- It's fast: with the daemon running, a YouTube link shows its first frame in
+  about 0.3–0.45 s.
+- The next video link plays in the same window, resized to the new video's
+  shape (a portrait Short, a landscape video). Fullscreen works as usual, and
+  leaving it puts the window back in the corner.
+- Anything it can't play (a normal page, a private or age-restricted video, a
+  photo post) opens in your browser.
+
+## How it fits into your desktop
+
+- **Your browser stays the default.** link-router doesn't register itself as a
+  browser, so browsers don't nag or take the default back. Switching browsers
+  keeps working too: the link-router daemon notices the new default and
+  follows it.
+- **Every app that opens links through the desktop is covered**, because
+  interception happens where the default handler is looked up: GTK, Qt and
+  KDE apps, terminals, Electron apps, `xdg-open`, and the desktop portal. No
+  browser extension is involved, and links you click inside the browser stay
+  in the browser.
+- **Compositors:** the video window is placed in the corner before its first
+  frame on Hyprland and sway, and as it appears on KDE Plasma 6. Other Wayland
+  compositors and X11 get a correctly sized window. Placement on GNOME is
+  planned.
+- **Systems:** Linux (x86_64) and FreeBSD 15 (amd64). It's one static binary
+  in your home directory; no root is needed, and uninstalling restores your
+  desktop entries.
+
+## Where it's going
+
+The player is the first plugin of a general link router. Planned: routes and
+plugins written in Lua, configured like `hyprland.lua`. Other content kinds
+(images, audio, documents) become plugins, and small custom rules live in the
+config ("these links open in that app"). The design documents below describe
+that core; most of it isn't implemented yet.
+
+Status: 0.1.0-beta.4. Interception and the `mpv-video` plugin work (see
+[MVP status](#mvp-status)).
 
 ## Install
 
@@ -65,7 +121,7 @@ logs; keeps the config unless `--purge`):
 curl -fsSL https://raw.githubusercontent.com/v-dermichev/link-router/main/uninstall.sh | sh
 ```
 
-## Shape in one paragraph
+## How it works
 
 A tiny statically linked client, `link-router`, is what the shadowed
 default-handler entries run (through per-entry `by-id/<id>` symlinks), so it
